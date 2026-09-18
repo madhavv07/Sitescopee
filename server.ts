@@ -1184,19 +1184,28 @@ function generateFallbackInsights(
 
 
 async function startServer() {
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
+  const distPath = path.join(process.cwd(), "dist");
+  const hasBuiltDist = fs.existsSync(path.join(distPath, "index.html"));
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    Boolean(process.env.RENDER) ||
+    hasBuiltDist;
+
+  // Static serving for production / Render
+  if (isProduction && hasBuiltDist) {
+    console.log("⚡ [SiteScope] Serving static production build from dist/");
+    app.use(express.static(distPath));
+    app.get("*", (_req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  } else {
+    // Vite middleware for local development
+    console.log("🛠️  [SiteScope] Running in development mode with Vite middleware");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
   }
 
   function listenOnAvailablePort(port: number, retriesLeft = 10) {
