@@ -1,6 +1,7 @@
 import express from "express";
 import http from "http";
 import path from "path";
+import fs from "fs";
 import dns from "dns/promises";
 import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
@@ -36,6 +37,238 @@ function getGeminiClient(): GoogleGenAI | null {
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
+
+// ============================================================================
+// AUTH & UNLOCKED SITES PERSISTENCE (Resend Email OTP & Persistent Entitlements)
+// ============================================================================
+
+// Memory store for active OTPs: email -> { otp, expiresAt, attempts }
+const otpStore = new Map<string, { otp: string; expiresAt: number; attempts: number }>();
+
+// Simple file-backed store for user unlocked sites: email -> Set of urls
+const UNLOCKED_DB_FILE = path.join(process.cwd(), "unlocked_sites.json");
+const userUnlockedSites = new Map<string, Set<string>>();
+
+// Initialize user unlocked sites from disk
+function loadUnlockedSites() {
+  try {
+    if (fs.existsSync(UNLOCKED_DB_FILE)) {
+      const raw = fs.readFileSync(UNLOCKED_DB_FILE, "utf-8");
+      const parsed = JSON.parse(raw);
+      for (const [email, sites] of Object.entries(parsed)) {
+        if (Array.isArray(sites)) {
+          userUnlockedSites.set(email.toLowerCase(), new Set(sites));
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not load unlocked_sites.json:", err);
+  }
+}
+
+function persistUnlockedSites() {
+  try {
+    const serialized: Record<string, string[]> = {};
+    for (const [email, sitesSet] of userUnlockedSites.entries()) {
+      serialized[email] = Array.from(sitesSet);
+    }
+    fs.writeFileSync(UNLOCKED_DB_FILE, JSON.stringify(serialized, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("Could not persist unlocked_sites.json:", err);
+  }
+}
+
+loadUnlockedSites();
+
+function recordSiteUnlock(email: string, siteUrl: string) {
+  if (!email || !siteUrl) return;
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanUrl = normalizeUrl(siteUrl);
+  if (!userUnlockedSites.has(cleanEmail)) {
+    userUnlockedSites.set(cleanEmail, new Set());
+  }
+  userUnlockedSites.get(cleanEmail)!.add(cleanUrl);
+  persistUnlockedSites();
+  console.log(`🔓 Recorded permanent site unlock: "${cleanUrl}" for user "${cleanEmail}"`);
+}
+
+// Endpoint: Send 6-Digit Login OTP via Resend
+app.post("/api/auth/send-otp", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || typeof email !== "string" || !email.includes("@")) {
+      return res.status(400).json({ error: "Please provide a valid email address." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Generate random 6-digit numeric OTP (e.g. 491823)
+    const otp = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    otpStore.set(cleanEmail, { otp, expiresAt, attempts: 0 });
+
+    const resendApiKey = process.env.RESEND_API_KEY?.trim();
+    const fromEmail = process.env.RESEND_FROM_EMAIL?.trim() || "SiteScope <onboarding@resend.dev>";
+    let emailSent = false;
+    let warning: string | undefined;
+
+    if (resendApiKey) {
+      try {
+        const emailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: fromEmail,
+            to: [cleanEmail],
+            subject: `Your SiteScope Login Code: ${otp}`,
+            html: `
+              <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #fffeef; padding: 40px 20px; color: #1a191e;">
+                <div style="max-width: 500px; margin: 0 auto; background-color: #ffffff; border: 3px solid #1a191e; border-radius: 20px; padding: 32px; box-shadow: 6px 6px 0px #1a191e;">
+                  <div style="display: inline-block; background-color: #ff4dce; color: #ffffff; font-weight: bold; font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 2px solid #1a191e; text-transform: uppercase; margin-bottom: 16px;">
+                    SiteScope Security
+                  </div>
+                  <h1 style="font-size: 24px; font-weight: 800; margin: 0 0 12px; color: #1a191e;">Your Verification Code</h1>
+                  <p style="font-size: 14px; color: #595763; margin-bottom: 24px; line-height: 1.5;">
+                    Enter the 6-digit verification code below to log in to SiteScope and access your unlocked website audits and technical code fixes:
+                  </p>
+                  <div style="background-color: #fffeef; border: 3px solid #1a191e; border-radius: 14px; padding: 18px; text-align: center; margin-bottom: 24px;">
+                    <span style="font-family: monospace; font-size: 36px; font-weight: 900; letter-spacing: 8px; color: #ff4dce;">${otp}</span>
+                  </div>
+                  <p style="font-size: 12px; color: #8c8998; margin: 0; line-height: 1.4;">
+                    This code expires in 10 minutes. If you did not request this login code, you can safely ignore this email.
+                  </p>
+                  <hr style="border: none; border-top: 2px solid rgba(26,25,30,0.1); margin: 24px 0 16px;" />
+                  <div style="font-size: 11px; color: #8c8998; font-weight: bold;">
+                    © 2026 SiteScope SEO & Performance Intelligence
+                  </div>
+                </div>
+              </div>
+            `,
+          }),
+        });
+
+        if (emailRes.ok) {
+          emailSent = true;
+          console.log(`📧 Resend OTP successfully dispatched to ${cleanEmail}`);
+        } else {
+          const errBody = await emailRes.text();
+          console.warn(`Resend API dispatch issue (${emailRes.status}):`, errBody);
+          warning = `Note: Free Resend sandbox sends to verified account email. (${errBody.slice(0, 80)})`;
+        }
+      } catch (sendErr: any) {
+        console.warn("Resend email send error:", sendErr.message);
+        warning = sendErr.message;
+      }
+    } else {
+      console.log(`[DEV ONLY] Resend key not set. Generated OTP for ${cleanEmail}: ${otp}`);
+    }
+
+    return res.json({
+      success: true,
+      emailSent,
+      message: emailSent
+        ? `A 6-digit code has been sent to ${cleanEmail}.`
+        : `Verification code generated for ${cleanEmail}.`,
+      warning,
+      // Provide devOtp for effortless local testing
+      devOtp: process.env.NODE_ENV !== "production" || !emailSent ? otp : undefined,
+    });
+  } catch (err: any) {
+    console.error("Send OTP error:", err);
+    return res.status(500).json({ error: "Failed to send verification code." });
+  }
+});
+
+// Endpoint: Verify 6-Digit Login OTP
+app.post("/api/auth/verify-otp", async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) {
+      return res.status(400).json({ error: "Email and 6-digit verification code are required." });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const record = otpStore.get(cleanEmail);
+
+    if (!record) {
+      return res.status(400).json({ error: "No active verification code found. Please request a new code." });
+    }
+
+    if (Date.now() > record.expiresAt) {
+      otpStore.delete(cleanEmail);
+      return res.status(400).json({ error: "Verification code has expired. Please request a fresh one." });
+    }
+
+    if (record.attempts >= 5) {
+      otpStore.delete(cleanEmail);
+      return res.status(400).json({ error: "Too many failed attempts. Please request a new code." });
+    }
+
+    if (record.otp.trim() !== otp.toString().trim()) {
+      record.attempts += 1;
+      return res.status(400).json({ error: "Incorrect verification code. Please try again." });
+    }
+
+    // OTP matched! Clean it up
+    otpStore.delete(cleanEmail);
+
+    const uid = "usr_" + crypto.createHash("sha256").update(cleanEmail).digest("hex").slice(0, 16);
+    const sessionToken = crypto.randomBytes(32).toString("hex");
+
+    // Retrieve any previously unlocked sites for this user
+    const unlockedList = Array.from(userUnlockedSites.get(cleanEmail) || []);
+
+    return res.json({
+      success: true,
+      user: {
+        email: cleanEmail,
+        uid,
+        displayName: cleanEmail.split("@")[0],
+        provider: "otp",
+      },
+      token: sessionToken,
+      unlockedSites: unlockedList,
+      message: "Successfully authenticated with SiteScope!",
+    });
+  } catch (err: any) {
+    console.error("Verify OTP error:", err);
+    return res.status(500).json({ error: "Failed to verify login code." });
+  }
+});
+
+// Endpoint: Get all unlocked sites for an authenticated user
+app.get("/api/user/unlocked-sites", (req, res) => {
+  try {
+    const email = (req.query.email as string)?.trim()?.toLowerCase();
+    if (!email) {
+      return res.json({ sites: [] });
+    }
+    const sites = Array.from(userUnlockedSites.get(email) || []);
+    return res.json({ email, sites });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch user unlocked sites." });
+  }
+});
+
+// Endpoint: Record an unlocked site for a user
+app.post("/api/user/record-unlock", (req, res) => {
+  try {
+    const { email, url } = req.body;
+    if (email && url) {
+      recordSiteUnlock(email, url);
+    }
+    const cleanEmail = email?.trim()?.toLowerCase();
+    const sites = Array.from(userUnlockedSites.get(cleanEmail) || []);
+    return res.json({ success: true, sites });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to record site unlock." });
+  }
+});
+
 
 // Endpoint: Create ₹10 (1000 paise) Razorpay Order
 app.post("/api/create-order", async (req, res) => {
@@ -102,7 +335,7 @@ app.post("/api/create-order", async (req, res) => {
 // Endpoint: Verify Razorpay Payment Signature
 app.post("/api/verify-payment", async (req, res) => {
   try {
-    const { orderId, paymentId, signature, isMock } = req.body;
+    const { orderId, paymentId, signature, isMock, email, url } = req.body;
     const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
 
     if (isMock || !keySecret) {
@@ -111,6 +344,11 @@ app.post("/api/verify-payment", async (req, res) => {
         .createHash("sha256")
         .update(`${orderId || "mock"}_paid_${Date.now()}`)
         .digest("hex");
+
+      if (email && url) {
+        recordSiteUnlock(email, url);
+      }
+
       return res.json({
         success: true,
         unlockToken,
@@ -136,6 +374,10 @@ app.post("/api/verify-payment", async (req, res) => {
       .createHash("sha256")
       .update(`${orderId}_${paymentId}_${Date.now()}`)
       .digest("hex");
+
+    if (email && url) {
+      recordSiteUnlock(email, url);
+    }
 
     return res.json({
       success: true,
@@ -239,7 +481,7 @@ app.post("/api/dodo/create-checkout", async (req, res) => {
 // Endpoint: Verify Dodo Payments Session
 app.post("/api/dodo/verify-session", async (req, res) => {
   try {
-    const { sessionId, isMock, url } = req.body;
+    const { sessionId, isMock, url, email } = req.body;
     const apiKey = process.env.DODO_PAYMENTS_API_KEY?.trim();
     const baseUrl = getDodoBaseUrl();
 
@@ -249,6 +491,10 @@ app.post("/api/dodo/verify-session", async (req, res) => {
         .createHash("sha256")
         .update(`${sessionId || "mock"}_dodo_paid_${Date.now()}`)
         .digest("hex");
+
+      if (email && url) {
+        recordSiteUnlock(email, url);
+      }
 
       return res.json({
         success: true,
@@ -275,6 +521,11 @@ app.post("/api/dodo/verify-session", async (req, res) => {
         .createHash("sha256")
         .update(`${sessionId}_dodo_verified_${Date.now()}`)
         .digest("hex");
+
+      if (email && url) {
+        recordSiteUnlock(email, url);
+      }
+
       return res.json({
         success: true,
         unlockToken,
@@ -294,6 +545,10 @@ app.post("/api/dodo/verify-session", async (req, res) => {
         .createHash("sha256")
         .update(`${sessionId}_${sessionData.payment_id || "paid"}_${Date.now()}`)
         .digest("hex");
+
+      if (email && url) {
+        recordSiteUnlock(email, url);
+      }
 
       return res.json({
         success: true,

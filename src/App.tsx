@@ -35,6 +35,9 @@ import { OpportunitiesList } from "./components/OpportunitiesList";
 import { LoadingProgress } from "./components/LoadingProgress";
 import { ContactExpertModal } from "./components/ContactExpertModal";
 import { PaymentModal } from "./components/PaymentModal";
+import { AuthModal, UserProfile } from "./components/AuthModal";
+import { auth, logoutUser } from "./lib/firebase";
+import { onAuthStateChanged } from "firebase/auth";
 
 const POPULAR_SITES = [
   { name: "Stripe", url: "https://stripe.com" },
@@ -80,6 +83,20 @@ export default function App() {
   const [isRegeneratingInsights, setIsRegeneratingInsights] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
+  // Authenticated user state
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("sitescope_user");
+        if (saved) return JSON.parse(saved);
+      } catch (e) {
+        console.warn("Failed to load user profile", e);
+      }
+    }
+    return null;
+  });
 
   // Unlocked audits state (persisted per URL)
   const [unlockedUrls, setUnlockedUrls] = useState<Record<string, boolean>>(() => {
@@ -93,6 +110,65 @@ export default function App() {
     }
     return {};
   });
+
+  // Sync with Firebase Auth state for Google sign-in
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser && firebaseUser.email) {
+        const profile: UserProfile = {
+          email: firebaseUser.email.toLowerCase(),
+          displayName: firebaseUser.displayName || firebaseUser.email.split("@")[0],
+          uid: firebaseUser.uid,
+          provider: "google",
+        };
+        setCurrentUser(profile);
+        try {
+          localStorage.setItem("sitescope_user", JSON.stringify(profile));
+        } catch {}
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Sync unlocked sites from server whenever currentUser changes
+  useEffect(() => {
+    if (!currentUser?.email) return;
+
+    fetch(`/api/user/unlocked-sites?email=${encodeURIComponent(currentUser.email)}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.sites && Array.isArray(data.sites) && data.sites.length > 0) {
+          setUnlockedUrls((prev) => {
+            const merged = { ...prev };
+            data.sites.forEach((site: string) => {
+              merged[site] = true;
+            });
+            try {
+              localStorage.setItem("sitescope_unlocked", JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      })
+      .catch((err) => console.warn("Could not sync user unlocked sites:", err));
+  }, [currentUser]);
+
+  const handleAuthSuccess = (user: UserProfile) => {
+    setCurrentUser(user);
+    try {
+      localStorage.setItem("sitescope_user", JSON.stringify(user));
+    } catch {}
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await logoutUser();
+    } catch {}
+    setCurrentUser(null);
+    try {
+      localStorage.removeItem("sitescope_user");
+    } catch {}
+  };
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -330,6 +406,15 @@ export default function App() {
       localStorage.setItem("sitescope_unlocked", JSON.stringify(newUnlocked));
     } catch {}
 
+    // Record to user's permanent account if logged in
+    if (currentUser?.email) {
+      fetch("/api/user/record-unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: currentUser.email, url: siteUrl, unlockToken }),
+      }).catch((err) => console.warn("Failed to record site unlock for user:", err));
+    }
+
     // Immediately fetch full unlocked action plan with code snippets
     setIsRegeneratingInsights(true);
     const activeStratData =
@@ -475,6 +560,10 @@ export default function App() {
           setErrorMessage(null);
         }}
         onOpenContact={() => setShowContactModal(true)}
+        currentUser={currentUser}
+        onOpenAuth={() => setShowAuthModal(true)}
+        onSignOut={handleSignOut}
+        unlockedCount={Object.values(unlockedUrls).filter(Boolean).length}
       />
 
       {/* Main Content Area */}
@@ -916,6 +1005,15 @@ export default function App() {
         onSuccess={handlePaymentSuccess}
         url={currentAnalysis?.url}
         strategy={currentAnalysis?.activeStrategy}
+        currentUser={currentUser}
+        onOpenAuth={() => setShowAuthModal(true)}
+      />
+
+      {/* Authentication (Email OTP & Google) Modal */}
+      <AuthModal
+        isOpen={showAuthModal}
+        onClose={() => setShowAuthModal(false)}
+        onAuthSuccess={handleAuthSuccess}
       />
 
       {/* Contact Madhav Gajjar Modal */}

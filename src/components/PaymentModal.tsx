@@ -14,6 +14,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { Strategy } from "../types";
+import { UserProfile } from "./AuthModal";
 
 interface PaymentModalProps {
   isOpen: boolean;
@@ -21,6 +22,8 @@ interface PaymentModalProps {
   onSuccess: (unlockToken: string) => void;
   url?: string;
   strategy?: Strategy;
+  currentUser?: UserProfile | null;
+  onOpenAuth?: () => void;
 }
 
 export function PaymentModal({
@@ -29,6 +32,8 @@ export function PaymentModal({
   onSuccess,
   url = "",
   strategy = "mobile",
+  currentUser,
+  onOpenAuth,
 }: PaymentModalProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
@@ -48,7 +53,7 @@ export function PaymentModal({
       const res = await fetch("/api/dodo/create-checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, strategy }),
+        body: JSON.stringify({ url, strategy, email: currentUser?.email }),
       });
 
       if (!res.ok) {
@@ -73,6 +78,7 @@ export function PaymentModal({
             sessionId: orderData.sessionId || `dodo_sim_${Date.now()}`,
             isMock: true,
             url,
+            email: currentUser?.email,
           }),
         });
 
@@ -109,6 +115,7 @@ export function PaymentModal({
           sessionId: `dodo_sim_${Date.now()}`,
           isMock: true,
           url,
+          email: currentUser?.email,
         }),
       });
 
@@ -312,6 +319,33 @@ export function PaymentModal({
             </span>
           </div>
         </div>
+
+        {/* Account Status / Persistence Notice */}
+        {currentUser ? (
+          <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border-2 border-emerald-500 font-mono text-xs flex items-center gap-2.5 text-emerald-800 dark:text-emerald-300 text-left">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+            <span>Unlocking for <strong className="underline">{currentUser.email}</strong> (saved permanently to your account)</span>
+          </div>
+        ) : (
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-400 font-mono text-xs flex items-center justify-between gap-3 text-amber-900 dark:text-amber-200 text-left">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0" />
+              <span>Want this audit saved permanently across devices?</span>
+            </div>
+            {onOpenAuth && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAuth();
+                }}
+                className="px-2.5 py-1 rounded-lg bg-amber-200 dark:bg-amber-800 text-amber-950 dark:text-amber-100 font-bold hover:bg-amber-300 transition-colors whitespace-nowrap cursor-pointer"
+              >
+                Sign In First
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Payment Mode Selector Tabs */}
         <div className="flex items-center gap-2 border-b-2 border-[var(--ink)]/20 pb-3 overflow-x-auto">

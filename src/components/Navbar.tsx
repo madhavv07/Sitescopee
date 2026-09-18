@@ -9,8 +9,11 @@ import {
   ChevronDown,
   Trash2,
   X,
+  User,
+  LogOut,
 } from "lucide-react";
 import { AnalysisResult } from "../types";
+import { UserProfile } from "./AuthModal";
 
 interface NavbarProps {
   darkMode: boolean;
@@ -23,6 +26,10 @@ interface NavbarProps {
   onOpenComparison: () => void;
   onNewAnalysis: () => void;
   onOpenContact?: () => void;
+  currentUser?: UserProfile | null;
+  onOpenAuth?: () => void;
+  onSignOut?: () => void;
+  unlockedCount?: number;
 }
 
 export function Navbar({
@@ -36,8 +43,13 @@ export function Navbar({
   onOpenComparison,
   onNewAnalysis,
   onOpenContact,
+  currentUser,
+  onOpenAuth,
+  onSignOut,
+  unlockedCount = 0,
 }: NavbarProps) {
   const [showHistoryDropdown, setShowHistoryDropdown] = useState(false);
+  const [showUserDropdown, setShowUserDropdown] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 w-full border-b-2 border-[var(--ink)] bg-[#fffeef]/90 dark:bg-[#1c1b22]/90 backdrop-blur-md transition-colors duration-200">
@@ -226,6 +238,69 @@ export function Navbar({
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse border border-[var(--ink)]" />
               <span>Contact Madhav</span>
             </button>
+          )}
+
+          {/* User Account / Sign In */}
+          {currentUser ? (
+            <div className="relative">
+              <button
+                type="button"
+                id="user-profile-menu-btn"
+                onClick={() => setShowUserDropdown(!showUserDropdown)}
+                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl font-mono text-xs font-bold bg-white dark:bg-[#292830] text-[var(--ink)] border-2 border-[var(--ink)] brutal-shadow-sm hover:bg-[#fff9ea] transition-all"
+              >
+                <div className="w-5 h-5 rounded-full bg-[#ff4dce] text-white flex items-center justify-center text-[10px] font-bold">
+                  {currentUser.displayName ? currentUser.displayName[0].toUpperCase() : "U"}
+                </div>
+                <span className="hidden md:inline max-w-[120px] truncate">{currentUser.email}</span>
+                {unlockedCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-emerald-500 text-white font-bold">
+                    {unlockedCount} 🔓
+                  </span>
+                )}
+                <ChevronDown className="w-3.5 h-3.5 opacity-60" />
+              </button>
+
+              {showUserDropdown && (
+                <div className="absolute right-0 mt-2 w-64 p-3 rounded-2xl bg-white dark:bg-[#292830] border-2 border-[var(--ink)] brutal-shadow-lg z-50 animate-in fade-in zoom-in-95 duration-150 space-y-2.5">
+                  <div className="border-b border-[var(--ink)]/15 pb-2">
+                    <div className="font-mono text-xs font-bold text-[var(--ink)] truncate">
+                      {currentUser.displayName || "SiteScope User"}
+                    </div>
+                    <div className="font-mono text-[11px] text-[var(--ink-muted)] truncate">
+                      {currentUser.email}
+                    </div>
+                    <div className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-400">
+                      {unlockedCount} Paid {unlockedCount === 1 ? "Audit" : "Audits"} Unlocked
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUserDropdown(false);
+                      onSignOut?.();
+                    }}
+                    className="w-full py-1.5 px-3 rounded-xl font-mono text-xs font-bold text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors flex items-center gap-2"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            onOpenAuth && (
+              <button
+                type="button"
+                id="navbar-signin-btn"
+                onClick={onOpenAuth}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-mono text-xs font-bold bg-[#fffeef] dark:bg-[#1c1b22] text-[var(--ink)] hover:bg-[#ff4dce] hover:text-white border-2 border-[var(--ink)] brutal-shadow-sm transition-all"
+              >
+                <User className="w-3.5 h-3.5 text-[#ff4dce]" />
+                <span>Sign In</span>
+              </button>
+            )
           )}
 
           {/* Dark / Light Toggle */}
