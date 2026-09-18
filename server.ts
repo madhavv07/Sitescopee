@@ -945,15 +945,18 @@ async function startServer() {
   }
 
   function listenOnAvailablePort(port: number, retriesLeft = 10) {
-    const server = app.listen(port, () => {
+    const isCloudEnv = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER || process.env.PORT);
+    const host = isCloudEnv ? "0.0.0.0" : undefined;
+
+    const onListening = () => {
       console.log(`\n======================================================`);
       console.log(`🚀 SiteScope server running on:`);
       console.log(`   ➜ Local:   http://localhost:${port}/`);
-      console.log(`   ➜ Network: http://127.0.0.1:${port}/`);
+      console.log(`   ➜ Network: http://0.0.0.0:${port}/`);
       console.log(`======================================================\n`);
 
       // If port is not 3000 and port 3000 happens to be free, setup a redirect so localhost:3000 works too!
-      if (port !== 3000) {
+      if (!isCloudEnv && port !== 3000) {
         try {
           const redirectServer = http.createServer((_req, res) => {
             res.writeHead(302, { Location: `http://localhost:${port}${_req.url || "/"}` });
@@ -967,7 +970,10 @@ async function startServer() {
           // Ignore
         }
       }
-    });
+    };
+
+    const server = host ? app.listen(port, host, onListening) : app.listen(port, onListening);
+
 
     server.on("error", (err: any) => {
       if (err.code === "EADDRINUSE" && retriesLeft > 0) {
