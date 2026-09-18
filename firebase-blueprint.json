@@ -1,0 +1,94 @@
+{
+  "entities": {
+    "analysis": {
+      "title": "Analysis",
+      "description": "Website performance and SEO analysis result",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the analysis record"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Normalized target URL tested"
+        },
+        "domain": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Domain hostname extracted from the URL"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["mobile", "desktop"],
+          "description": "Device strategy used for PageSpeed"
+        },
+        "performanceScore": {
+          "type": "number",
+          "description": "Performance score 0 to 100"
+        },
+        "seoScore": {
+          "type": "number",
+          "description": "SEO score 0 to 100"
+        },
+        "accessibilityScore": {
+          "type": "number",
+          "description": "Accessibility score 0 to 100"
+        },
+        "bestPracticesScore": {
+          "type": "number",
+          "description": "Best Practices score 0 to 100"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "AI consultant summary"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        }
+      },
+      "required": ["id", "userId", "url", "domain", "strategy", "createdAt"]
+    },
+    "userProfile": {
+      "title": "UserProfile",
+      "description": "User profile metadata",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp created"
+        }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "userProfile",
+      "description": "Private profile document for each user"
+    },
+    "/users/{userId}/analyses/{analysisId}": {
+      "schema": "analysis",
+      "description": "Website audits conducted by the authenticated user"
+    }
+  }
+}

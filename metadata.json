@@ -1,0 +1,7 @@
+{
+  "name": "SiteScope",
+  "description": "Website SEO & Performance Intelligence Tool powered by Google PageSpeed Insights and Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
